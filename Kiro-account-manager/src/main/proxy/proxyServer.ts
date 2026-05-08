@@ -865,7 +865,10 @@ export class ProxyServer {
       requestCount: acc.requestCount || 0,
       errorCount: acc.errorCount || 0,
       expiresAt: acc.expiresAt,
-      authMethod: acc.authMethod
+      authMethod: acc.authMethod,
+      profileArn: acc.profileArn,
+      region: acc.region,
+      apiRegion: acc.apiRegion
     }))
 
     res.writeHead(200, { 'Content-Type': 'application/json' })
@@ -1057,7 +1060,10 @@ export class ProxyServer {
 
     // 检查是否为该模型默认启用思考模式
     const modelThinkingEnabled = this.config.modelThinkingMode?.[request.model]
-    const thinkingEnabled = modelThinkingEnabled || (req.headers['anthropic-beta'] as string || '').toLowerCase().includes('thinking')
+    const thinkingHeaderEnabled = (req.headers['anthropic-beta'] as string || '').toLowerCase().includes('thinking')
+    // Claude Opus 4.7 自带 adaptive thinking，不需要手动注入 thinking 提示
+    const isOpus47 = request.model.toLowerCase().includes('opus-4-7') || request.model.toLowerCase().includes('opus-4.7')
+    const thinkingEnabled = !isOpus47 && (modelThinkingEnabled || thinkingHeaderEnabled)
 
     this.recordNewRequest()
     this.events.onRequest?.({ path: '/v1/chat/completions', method: 'POST' })
@@ -1454,7 +1460,10 @@ export class ProxyServer {
 
     // 检查是否为该模型默认启用思考模式
     const modelThinkingEnabled = this.config.modelThinkingMode?.[request.model]
-    const thinkingEnabled = modelThinkingEnabled || (req.headers['anthropic-beta'] as string || '').toLowerCase().includes('thinking')
+    const thinkingHeaderEnabled = (req.headers['anthropic-beta'] as string || '').toLowerCase().includes('thinking')
+    // Claude Opus 4.7 自带 adaptive thinking，不需要手动注入 thinking 提示
+    const isOpus47 = request.model.toLowerCase().includes('opus-4-7') || request.model.toLowerCase().includes('opus-4.7')
+    const thinkingEnabled = !isOpus47 && (modelThinkingEnabled || thinkingHeaderEnabled)
 
     this.recordNewRequest()
     this.events.onRequest?.({ path: '/v1/messages', method: 'POST' })

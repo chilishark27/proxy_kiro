@@ -471,9 +471,10 @@ async function refreshOidcToken(
   clientSecret: string,
   region: string = 'us-east-1'
 ): Promise<OidcRefreshResult> {
-  console.log(`[OIDC] Refreshing token with clientId: ${clientId.substring(0, 20)}...`)
+  console.log(`[OIDC] Refreshing token with clientId: ${clientId.substring(0, 20)}... (region: ${region})`)
   
   const url = `https://oidc.${region}.amazonaws.com/token`
+  console.log(`[OIDC] Token endpoint: ${url}`)
   
   const payload = {
     clientId,
@@ -1473,6 +1474,7 @@ function createWindow(): void {
               clientId: acc.credentials?.clientId,
               clientSecret: acc.credentials?.clientSecret,
               region: acc.credentials?.region || 'us-east-1',
+              apiRegion: acc.credentials?.apiRegion,
               authMethod: acc.credentials?.authMethod
             }))
           if (proxyAccounts.length > 0) {
@@ -4135,6 +4137,7 @@ app.whenReady().then(async () => {
         clientId: account.credentials?.clientId,
         clientSecret: account.credentials?.clientSecret,
         region: account.credentials?.region || 'us-east-1',
+        apiRegion: account.credentials?.apiRegion,
         authMethod: account.credentials?.authMethod
       }
 
@@ -4820,9 +4823,9 @@ app.whenReady().then(async () => {
   })
 
   // IPC: 获取账户可用模型列表
-  ipcMain.handle('account-get-models', async (_event, accessToken: string, region?: string, profileArn?: string) => {
+  ipcMain.handle('account-get-models', async (_event, accessToken: string, region?: string, profileArn?: string, apiRegion?: string) => {
     try {
-      const models = await fetchKiroModels({ accessToken, region: region || 'us-east-1', profileArn } as ProxyAccount)
+      const models = await fetchKiroModels({ accessToken, region: region || 'us-east-1', apiRegion, profileArn } as ProxyAccount)
       return {
         success: true,
         models: models.map(m => ({
@@ -4842,9 +4845,9 @@ app.whenReady().then(async () => {
   })
 
   // IPC: 获取可用订阅列表
-  ipcMain.handle('account-get-subscriptions', async (_event, accessToken: string, region?: string) => {
+  ipcMain.handle('account-get-subscriptions', async (_event, accessToken: string, region?: string, apiRegion?: string) => {
     try {
-      const result = await fetchAvailableSubscriptions({ accessToken, region: region || 'us-east-1' } as ProxyAccount)
+      const result = await fetchAvailableSubscriptions({ accessToken, region: region || 'us-east-1', apiRegion } as ProxyAccount)
       if (result.subscriptionPlans) {
         return { 
           success: true, 
@@ -4859,9 +4862,9 @@ app.whenReady().then(async () => {
   })
 
   // IPC: 获取订阅管理/支付链接
-  ipcMain.handle('account-get-subscription-url', async (_event, accessToken: string, subscriptionType?: string, region?: string) => {
+  ipcMain.handle('account-get-subscription-url', async (_event, accessToken: string, subscriptionType?: string, region?: string, apiRegion?: string) => {
     try {
-      const result = await fetchSubscriptionToken({ accessToken, region: region || 'us-east-1' } as ProxyAccount, subscriptionType)
+      const result = await fetchSubscriptionToken({ accessToken, region: region || 'us-east-1', apiRegion } as ProxyAccount, subscriptionType)
       if (result.encodedVerificationUrl) {
         return { success: true, url: result.encodedVerificationUrl, status: result.status }
       }

@@ -186,6 +186,7 @@ export function ProxyPanel() {
           clientId: acc.credentials?.clientId,
           clientSecret: acc.credentials?.clientSecret,
           region: acc.credentials?.region || 'us-east-1',
+          apiRegion: acc.credentials?.apiRegion,
           authMethod: acc.credentials?.authMethod as 'social' | 'idc' | undefined
         }))
 

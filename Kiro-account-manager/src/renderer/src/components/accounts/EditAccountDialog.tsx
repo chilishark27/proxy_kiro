@@ -25,6 +25,8 @@ export function EditAccountDialog({
   const [clientId, setClientId] = useState('')
   const [clientSecret, setClientSecret] = useState('')
   const [region, setRegion] = useState('us-east-1')
+  const [apiRegion, setApiRegion] = useState('')
+  const [profileArn, setProfileArn] = useState('')
 
   // 可编辑字段
   const [nickname, setNickname] = useState('')
@@ -71,6 +73,8 @@ export function EditAccountDialog({
       setClientId(account.credentials.clientId || '')
       setClientSecret(account.credentials.clientSecret || '')
       setRegion(account.credentials.region || 'us-east-1')
+      setApiRegion(account.credentials.apiRegion || '')
+      setProfileArn(account.profileArn || '')
       setNickname(account.nickname || '')
       
       // 设置当前账号信息
@@ -169,6 +173,7 @@ export function EditAccountDialog({
       email: accountInfo.email,
       userId: accountInfo.userId,
       nickname: nickname || undefined,
+      profileArn: profileArn || undefined,
       credentials: {
         ...account.credentials,
         accessToken: accountInfo.accessToken,
@@ -177,6 +182,7 @@ export function EditAccountDialog({
         clientId,
         clientSecret,
         region,
+        apiRegion: apiRegion || undefined,
         expiresAt: now + 3600 * 1000
       },
       subscription: {
@@ -369,16 +375,55 @@ export function EditAccountDialog({
                   </div>
 
                   <div className="space-y-2">
-                    <label className="text-sm font-medium">AWS Region</label>
+                    <label className="text-sm font-medium">{isEn ? 'SSO Region (for token refresh)' : 'SSO 区域（用于刷新令牌）'}</label>
                     <select
                       value={region}
                       onChange={(e) => setRegion(e.target.value)}
                       className="w-full h-10 px-3 py-2 text-sm rounded-xl border border-input bg-background/50 ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2"
                     >
                       <option value="us-east-1">us-east-1 (N. Virginia)</option>
+                      <option value="us-east-2">us-east-2 (Ohio)</option>
                       <option value="us-west-2">us-west-2 (Oregon)</option>
+                      <option value="eu-central-1">eu-central-1 (Frankfurt)</option>
                       <option value="eu-west-1">eu-west-1 (Ireland)</option>
+                      <option value="ap-southeast-1">ap-southeast-1 (Singapore)</option>
+                      <option value="ap-northeast-1">ap-northeast-1 (Tokyo)</option>
+                      <option value="ap-south-1">ap-south-1 (Mumbai)</option>
                     </select>
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">{isEn ? 'Kiro API Region (for model/usage queries)' : 'Kiro API 区域（用于模型和用量查询）'}</label>
+                    <select
+                      value={apiRegion}
+                      onChange={(e) => setApiRegion(e.target.value)}
+                      className="w-full h-10 px-3 py-2 text-sm rounded-xl border border-input bg-background/50 ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2"
+                    >
+                      <option value="">{isEn ? 'Auto (follow SSO Region)' : '自动（跟随 SSO 区域）'}</option>
+                      <option value="us-east-1">us-east-1 (N. Virginia)</option>
+                      <option value="eu-central-1">eu-central-1 (Frankfurt)</option>
+                    </select>
+                    <p className="text-xs text-muted-foreground">
+                      {isEn 
+                        ? 'Set this if your Kiro subscription is in a different region than your SSO' 
+                        : '如果你的 Kiro 订阅区域与 SSO 区域不同，请在此设置'}
+                    </p>
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">Profile ARN</label>
+                    <input
+                      type="text"
+                      value={profileArn}
+                      onChange={(e) => setProfileArn(e.target.value)}
+                      placeholder="arn:aws:codewhisperer:region:account:profile/ID"
+                      className="w-full h-10 px-3 py-2 text-sm rounded-xl border border-input bg-background/50 ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 font-mono"
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      {isEn 
+                        ? 'Required for Enterprise/IAM Identity Center accounts. Find it in AWS Kiro Console.' 
+                        : 'Enterprise/IAM Identity Center 账号必填。在 AWS Kiro Console 中查找。'}
+                    </p>
                   </div>
                 </>
               )}

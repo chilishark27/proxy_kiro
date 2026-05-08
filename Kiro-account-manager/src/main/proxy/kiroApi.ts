@@ -49,39 +49,81 @@ async function fetchWithProxy(url: string, options: RequestInit): Promise<Respon
   return await fetch(url, options)
 }
 
-// Kiro API 端点配置
+// Kiro API 端点配置 - 根据区域动态生成
+interface KiroEndpoint {
+  url: string
+  origin: string
+  amzTarget: string
+  name: string
+}
+
+function getKiroEndpoints(apiRegion?: string, region?: string, profileArn?: string): KiroEndpoint[] {
+  // 优先使用 apiRegion，其次从 profileArn 提取区域，最后用 region，默认 us-east-1
+  let effectiveRegion = apiRegion || region
+  
+  // 从 profileArn 中提取区域（格式: arn:aws:codewhisperer:{region}:{account}:profile/{id}）
+  if (!apiRegion && profileArn) {
+    const arnMatch = profileArn.match(/arn:aws:codewhisperer:([^:]+):/)
+    if (arnMatch) {
+      effectiveRegion = arnMatch[1]
+      console.log(`[KiroAPI] Extracted apiRegion from profileArn: ${effectiveRegion}`)
+    }
+  }
+  
+  const isEU = effectiveRegion === 'eu-central-1' || (effectiveRegion?.startsWith('eu-') ?? false)
+  const serviceRegion = isEU ? 'eu-central-1' : 'us-east-1'
+  
+  // kiro-gateway 使用 q.{region}.amazonaws.com 端点（对所有区域都有效）
+  // codewhisperer.{region} 端点可能对某些区域/账号类型不支持新模型
+  return [
+    {
+      url: `https://q.${serviceRegion}.amazonaws.com/generateAssistantResponse`,
+      origin: 'AI_EDITOR',
+      amzTarget: 'AmazonQDeveloperStreamingService.SendMessage',
+      name: 'AmazonQ'
+    },
+    {
+      url: `https://codewhisperer.${serviceRegion}.amazonaws.com/generateAssistantResponse`,
+      origin: 'AI_EDITOR',
+      amzTarget: 'AmazonCodeWhispererStreamingService.GenerateAssistantResponse',
+      name: 'CodeWhisperer'
+    }
+  ]
+}
+
+// 保留静态端点用于不需要区域感知的场景
 const KIRO_ENDPOINTS = [
+  {
+    url: 'https://q.us-east-1.amazonaws.com/generateAssistantResponse',
+    origin: 'AI_EDITOR',
+    amzTarget: 'AmazonQDeveloperStreamingService.SendMessage',
+    name: 'AmazonQ'
+  },
   {
     url: 'https://codewhisperer.us-east-1.amazonaws.com/generateAssistantResponse',
     origin: 'AI_EDITOR',
     amzTarget: 'AmazonCodeWhispererStreamingService.GenerateAssistantResponse',
     name: 'CodeWhisperer'
-  },
-  {
-    url: 'https://q.us-east-1.amazonaws.com/generateAssistantResponse',
-    origin: 'CLI',
-    amzTarget: 'AmazonQDeveloperStreamingService.SendMessage',
-    name: 'AmazonQ'
   }
 ]
 
 // Kiro 版本
-const KIRO_VERSION = '0.6.18'
+const KIRO_VERSION = '0.7.45'
 
-// User-Agent 生成函数 - Social 认证方式
+// User-Agent 生成函数 - 匹配 kiro-gateway 格式 (sdk 1.0.27)
 function getKiroUserAgent(machineId?: string): string {
   const suffix = machineId ? `KiroIDE-${KIRO_VERSION}-${machineId}` : `KiroIDE-${KIRO_VERSION}`
-  return `aws-sdk-js/1.0.18 ua/2.1 os/windows lang/js md/nodejs#20.16.0 api/codewhispererstreaming#1.0.18 m/E ${suffix}`
+  return `aws-sdk-js/1.0.27 ua/2.1 os/win32#10.0.19044 lang/js md/nodejs#22.21.1 api/codewhispererstreaming#1.0.27 m/E ${suffix}`
 }
 
 function getKiroAmzUserAgent(machineId?: string): string {
-  const suffix = machineId ? `KiroIDE ${KIRO_VERSION} ${machineId}` : `KiroIDE-${KIRO_VERSION}`
-  return `aws-sdk-js/1.0.18 ${suffix}`
+  const suffix = machineId ? `KiroIDE-${KIRO_VERSION}-${machineId}` : `KiroIDE-${KIRO_VERSION}`
+  return `aws-sdk-js/1.0.27 ${suffix}`
 }
 
-// User-Agent 配置 - IDC 认证方式 (Amazon Q CLI 样式)
-const KIRO_CLI_USER_AGENT = 'aws-sdk-rust/1.3.9 os/macos lang/rust/1.87.0'
-const KIRO_CLI_AMZ_USER_AGENT = 'aws-sdk-rust/1.3.9 ua/2.1 api/ssooidc/1.88.0 os/macos lang/rust/1.87.0 m/E app/AmazonQ-For-CLI'
+// User-Agent 配置 - IDC 认证方式 (Amazon Q CLI 样式) - 保留用于未来兼容
+// const KIRO_CLI_USER_AGENT = 'aws-sdk-rust/1.3.9 os/macos lang/rust/1.87.0'
+// const KIRO_CLI_AMZ_USER_AGENT = 'aws-sdk-rust/1.3.9 ua/2.1 api/ssooidc/1.88.0 os/macos lang/rust/1.87.0 m/E app/AmazonQ-For-CLI'
 
 // Agent 模式
 const AGENT_MODE_SPEC = 'spec' // IDE 模式
@@ -117,36 +159,86 @@ const THINKING_MODE_PROMPT = `<thinking_mode>enabled</thinking_mode>
 
 // 模型 ID 映射
 const MODEL_ID_MAP: Record<string, string> = {
+  // Kiro generateAssistantResponse API 接受的模型 ID 格式（点分版本号格式）
+  // 参考: https://github.com/jwadow/kiro-gateway/blob/main/kiro/model_resolver.py
+  // 格式: claude-{family}-{major}.{minor}, 例如 claude-haiku-4.5
+  
+  // Claude Opus 4.7
+  'claude-opus-4.7': 'claude-opus-4.7',
+  'claude-opus-4-7': 'claude-opus-4.7',
+  // Claude Opus 4.6
+  'claude-opus-4.6': 'claude-opus-4.6',
+  'claude-opus-4-6': 'claude-opus-4.6',
+  // Claude Sonnet 4.6
+  'claude-sonnet-4.6': 'claude-sonnet-4.6',
+  'claude-sonnet-4-6': 'claude-sonnet-4.6',
   // Claude 4.5 系列
-  'claude-sonnet-4-5': 'claude-sonnet-4.5',
   'claude-sonnet-4.5': 'claude-sonnet-4.5',
-  'claude-haiku-4-5': 'claude-haiku-4.5',
+  'claude-sonnet-4-5': 'claude-sonnet-4.5',
   'claude-haiku-4.5': 'claude-haiku-4.5',
-  'claude-opus-4-5': 'claude-opus-4.5',
+  'claude-haiku-4-5': 'claude-haiku-4.5',
   'claude-opus-4.5': 'claude-opus-4.5',
-  // Claude 4 系列
+  'claude-opus-4-5': 'claude-opus-4.5',
+  // Claude Opus 4.1
+  'claude-opus-4.1': 'claude-opus-4.1',
+  'claude-opus-4-1': 'claude-opus-4.1',
+  // Claude 4 系列（无 minor 版本）
   'claude-sonnet-4': 'claude-sonnet-4',
   'claude-sonnet-4-20250514': 'claude-sonnet-4',
+  // Claude 3.7
+  'claude-3.7-sonnet': 'claude-3.7-sonnet',
+  'claude-3-7-sonnet': 'claude-3.7-sonnet',
+  'claude-3-7-sonnet-20250219': 'claude-3.7-sonnet',
+  // MiniMax 系列
+  'minimax-m2.5': 'minimax-m2.5',
+  'minimax-m2.1': 'minimax-m2.1',
+  // Qwen 系列
+  'qwen3-coder-next': 'qwen3-coder-next',
+  // GLM-5 / DeepSeek
+  'glm-5': 'glm-5',
+  'deepseek-v3.2': 'deepseek-v3.2',
+  // Auto
+  'auto': 'auto',
   // Claude 3.5 系列 (映射到 Sonnet 4.5)
   'claude-3-5-sonnet': 'claude-sonnet-4.5',
+  'claude-3.5-sonnet': 'claude-sonnet-4.5',
   'claude-3-opus': 'claude-sonnet-4.5',
   'claude-3-sonnet': 'claude-sonnet-4',
   'claude-3-haiku': 'claude-haiku-4.5',
-  // GPT 兼容映射 (映射到 Sonnet 4.5)
+  // GPT 兼容映射
   'gpt-4': 'claude-sonnet-4.5',
   'gpt-4o': 'claude-sonnet-4.5',
   'gpt-4-turbo': 'claude-sonnet-4.5',
-  'gpt-3.5-turbo': 'claude-sonnet-4.5',
-  'default': 'claude-sonnet-4.5'
+  'gpt-3.5-turbo': 'claude-haiku-4.5',
+  'default': 'claude-haiku-4.5'
 }
 
 export function mapModelId(model: string): string {
   const lower = model.toLowerCase()
+  
+  // 精确匹配优先
+  if (MODEL_ID_MAP[lower]) {
+    const mapped = MODEL_ID_MAP[lower]
+    console.log(`[mapModelId] "${model}" -> "${mapped}" (exact match)`)
+    return mapped
+  }
+  
+  // 如果已经是 Bedrock 格式（anthropic.xxx），直接透传
+  if (lower.startsWith('anthropic.')) {
+    console.log(`[mapModelId] "${model}" -> "${lower}" (bedrock format, pass-through)`)
+    return lower
+  }
+  
+  // 模糊匹配（用于兼容旧格式）
   for (const [key, value] of Object.entries(MODEL_ID_MAP)) {
+    if (key === 'default') continue
     if (lower.includes(key)) {
+      console.log(`[mapModelId] "${model}" -> "${value}" (fuzzy match via "${key}")`)
       return value
     }
   }
+  
+  console.log(`[mapModelId] "${model}" -> "${MODEL_ID_MAP.default}" (default)`)
   return MODEL_ID_MAP.default
 }
 
@@ -474,29 +566,34 @@ function getAccountMachineId(accountId: string, accountMachineId?: string): stri
 }
 
 // 获取认证方式对应的请求头
-function getAuthHeaders(account: ProxyAccount, endpoint: typeof KIRO_ENDPOINTS[0]): Record<string, string> {
-  const isIDC = account.authMethod === 'idc'
+function getAuthHeaders(account: ProxyAccount, _endpoint: KiroEndpoint): Record<string, string> {
+  const isIDC = account.authMethod === 'idc' || (account.authMethod as string) === 'IdC'
   const machineId = getAccountMachineId(account.id, account.machineId)
   
-  return {
+  // 基础 headers — 完全匹配 kiro-gateway 的 get_kiro_headers 格式
+  const headers: Record<string, string> = {
     'Content-Type': 'application/json',
-    'Accept': '*/*',
-    'X-Amz-Target': endpoint.amzTarget,
-    'User-Agent': isIDC ? KIRO_CLI_USER_AGENT : getKiroUserAgent(machineId),
-    'X-Amz-User-Agent': isIDC ? KIRO_CLI_AMZ_USER_AGENT : getKiroAmzUserAgent(machineId),
+    'Authorization': `Bearer ${account.accessToken}`,
+    'User-Agent': getKiroUserAgent(machineId),
+    'x-amz-user-agent': getKiroAmzUserAgent(machineId),
     'x-amzn-kiro-agent-mode': isIDC ? AGENT_MODE_VIBE : AGENT_MODE_SPEC,
     'x-amzn-codewhisperer-optout': 'true',
-    'Amz-Sdk-Request': 'attempt=1; max=3',
-    'Amz-Sdk-Invocation-Id': uuidv4(),
-    'Authorization': `Bearer ${account.accessToken}`
+    'amz-sdk-invocation-id': uuidv4(),
+    'amz-sdk-request': 'attempt=1; max=3'
   }
+
+  // kiro-gateway 不发送 X-Amz-Target header — URL 路径已经指定了操作
+  // headers['X-Amz-Target'] = endpoint.amzTarget
+
+  return headers
 }
 
 // 获取排序后的端点列表（根据首选端点配置）
-function getSortedEndpoints(preferredEndpoint?: 'codewhisperer' | 'amazonq'): typeof KIRO_ENDPOINTS {
-  if (!preferredEndpoint) return [...KIRO_ENDPOINTS]
+function getSortedEndpoints(preferredEndpoint?: 'codewhisperer' | 'amazonq', endpoints?: KiroEndpoint[]): KiroEndpoint[] {
+  const endpointList = endpoints || KIRO_ENDPOINTS
+  if (!preferredEndpoint) return [...endpointList]
   
-  const sorted = [...KIRO_ENDPOINTS]
+  const sorted = [...endpointList]
   const preferredName = preferredEndpoint === 'codewhisperer' ? 'CodeWhisperer' : 'AmazonQ'
   
   sorted.sort((a, b) => {
@@ -518,7 +615,9 @@ export async function callKiroApiStream(
   signal?: AbortSignal,
   preferredEndpoint?: 'codewhisperer' | 'amazonq'
 ): Promise<void> {
-  const endpoints = getSortedEndpoints(preferredEndpoint)
+  // 根据账号的 apiRegion/region/profileArn 动态选择端点
+  const dynamicEndpoints = getKiroEndpoints(account.apiRegion, account.region, account.profileArn)
+  const endpoints = getSortedEndpoints(preferredEndpoint, dynamicEndpoints)
   let lastError: Error | null = null
 
   for (const endpoint of endpoints) {
@@ -530,7 +629,8 @@ export async function callKiroApiStream(
 
       // 调试：打印请求体摘要
       const payloadStr = JSON.stringify(payload)
-      console.log(`[KiroAPI] Request to ${endpoint.name}:`)
+      console.log(`[KiroAPI] Request to ${endpoint.name} (${endpoint.url}):`)
+      console.log(`[KiroAPI]   - ModelId: ${payload.conversationState.currentMessage.userInputMessage?.modelId}`)
       console.log(`[KiroAPI]   - Content length: ${payload.conversationState.currentMessage.userInputMessage?.content?.length || 0}`)
       console.log(`[KiroAPI]   - Tools count: ${payload.conversationState.currentMessage.userInputMessage?.userInputMessageContext?.tools?.length || 0}`)
       console.log(`[KiroAPI]   - Payload size: ${payloadStr.length} bytes`)
@@ -1114,14 +1214,29 @@ export interface KiroModel {
 }
 
 // 根据账号区域获取 Q Service 端点（官方插件使用 q.{region}.amazonaws.com）
-function getQServiceEndpoint(region?: string): string {
-  if (region?.startsWith('eu-')) return 'https://q.eu-central-1.amazonaws.com'
+// 注意：Kiro/Amazon Q 目前只支持 us-east-1 和 eu-central-1 两个服务端点
+// 对于其他区域（如 ap-southeast-1）的 IAM Identity Center 账号，需要映射到最近的支持端点
+function getQServiceEndpoint(region?: string, apiRegion?: string): string {
+  // 优先使用 apiRegion（Kiro 服务区域），其次使用 region（OIDC 区域）
+  const effectiveRegion = apiRegion || region
+  if (!effectiveRegion) return 'https://q.us-east-1.amazonaws.com'
+  // 直接支持的区域
+  if (effectiveRegion === 'eu-central-1') return 'https://q.eu-central-1.amazonaws.com'
+  if (effectiveRegion === 'us-east-1') return 'https://q.us-east-1.amazonaws.com'
+  // EU 区域映射到 eu-central-1
+  if (effectiveRegion.startsWith('eu-')) return 'https://q.eu-central-1.amazonaws.com'
+  // 所有其他区域（us-*, ap-*, ca-*, sa-*, me-*, af-*）映射到 us-east-1
   return 'https://q.us-east-1.amazonaws.com'
 }
 
 // 获取 Kiro 官方模型列表（支持分页，与官方插件一致传递 profileArn）
+// 对于 Enterprise 账号，如果主端点失败会自动尝试备用端点
 export async function fetchKiroModels(account: ProxyAccount): Promise<KiroModel[]> {
-  const baseUrl = getQServiceEndpoint(account.region)
+  const primaryUrl = getQServiceEndpoint(account.region, account.apiRegion)
+  // 备用端点：如果主端点是 us-east-1 则备用 eu-central-1，反之亦然
+  const fallbackUrl = primaryUrl.includes('eu-central-1') 
+    ? 'https://q.us-east-1.amazonaws.com' 
+    : 'https://q.eu-central-1.amazonaws.com'
   const machineId = getAccountMachineId(account.id, account.machineId)
   
   const headers: Record<string, string> = {
@@ -1133,10 +1248,11 @@ export async function fetchKiroModels(account: ProxyAccount): Promise<KiroModel[
     'x-amzn-codewhisperer-optout': 'true'
   }
 
-  const allModels: KiroModel[] = []
-  let nextToken: string | undefined
+  // 尝试从指定端点获取模型
+  const fetchFromEndpoint = async (baseUrl: string): Promise<KiroModel[]> => {
+    const allModels: KiroModel[] = []
+    let nextToken: string | undefined
 
-  try {
     do {
       const params = new URLSearchParams({ origin: 'AI_EDITOR', maxResults: '50' })
       if (account.profileArn) params.set('profileArn', account.profileArn)
@@ -1146,8 +1262,8 @@ export async function fetchKiroModels(account: ProxyAccount): Promise<KiroModel[
       const response = await fetchWithProxy(url, { method: 'GET', headers })
       
       if (!response.ok) {
-        console.error('[KiroAPI] ListAvailableModels failed:', response.status)
-        break
+        console.error(`[KiroAPI] ListAvailableModels failed on ${baseUrl}: ${response.status}`)
+        throw new Error(`HTTP ${response.status}`)
       }
 
       const data = await response.json()
@@ -1156,9 +1272,25 @@ export async function fetchKiroModels(account: ProxyAccount): Promise<KiroModel[
     } while (nextToken)
 
     return allModels
+  }
+
+  try {
+    // 先尝试主端点
+    const models = await fetchFromEndpoint(primaryUrl)
+    if (models.length > 0) return models
+    
+    // 主端点返回空结果，尝试备用端点
+    console.log(`[KiroAPI] Primary endpoint (${primaryUrl}) returned 0 models, trying fallback (${fallbackUrl})`)
+    return await fetchFromEndpoint(fallbackUrl)
   } catch (error) {
-    console.error('[KiroAPI] ListAvailableModels error:', error)
-    return allModels.length > 0 ? allModels : []
+    // 主端点失败，尝试备用端点
+    console.log(`[KiroAPI] Primary endpoint failed, trying fallback (${fallbackUrl}):`, (error as Error).message)
+    try {
+      return await fetchFromEndpoint(fallbackUrl)
+    } catch (fallbackError) {
+      console.error('[KiroAPI] Both endpoints failed:', (fallbackError as Error).message)
+      return []
+    }
   }
 }
 
@@ -1186,7 +1318,7 @@ export interface SubscriptionListResponse {
 
 // 获取可用订阅列表
 export async function fetchAvailableSubscriptions(account: ProxyAccount): Promise<SubscriptionListResponse> {
-  const baseUrl = getQServiceEndpoint(account.region)
+  const baseUrl = getQServiceEndpoint(account.region, account.apiRegion)
   const url = `${baseUrl}/listAvailableSubscriptions`
   const machineId = getAccountMachineId(account.id, account.machineId)
   
@@ -1228,7 +1360,7 @@ export async function fetchSubscriptionToken(
   account: ProxyAccount,
   subscriptionType?: string
 ): Promise<SubscriptionTokenResponse> {
-  const baseUrl = getQServiceEndpoint(account.region)
+  const baseUrl = getQServiceEndpoint(account.region, account.apiRegion)
   const url = `${baseUrl}/CreateSubscriptionToken`
   const machineId = getAccountMachineId(account.id, account.machineId)
   

@@ -229,7 +229,8 @@ export interface ProxyAccount {
   refreshToken?: string
   clientId?: string
   clientSecret?: string
-  region?: string
+  region?: string        // OIDC 注册区域（用于 token 刷新）
+  apiRegion?: string     // Kiro API 服务区域（用于模型列表、API 调用）
   authMethod?: 'social' | 'idc'
   provider?: string
   profileArn?: string
